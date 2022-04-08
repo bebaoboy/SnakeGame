@@ -3,6 +3,7 @@ import time
 
 import pygame
 import random
+from display_ingame_text import display_ingame_text
 
 PNG_SIZE = 32
 
@@ -91,6 +92,15 @@ class Apple(pygame.sprite.Sprite):
         self.rect.center = pos
 
 
+class Wall(pygame.sprite.Sprite):
+    def __init__(self, pos):
+        super().__init__()
+        self.image = pygame.image.load('assets/wall.png').convert_alpha()
+        self.image = pygame.transform.scale(self.image, (PNG_SIZE + 5, PNG_SIZE - 5))
+        self.rect = self.image.get_rect()
+        self.rect.center = pos
+
+
 class SnakeGame:
     def __init__(self):
         self._running = True
@@ -100,16 +110,22 @@ class SnakeGame:
         self._clock = pygame.time.Clock()
         self._FPS = 60
         self._dt = 1
+        self._font = 'Courier New Bold'
+
         self._move_timer = 0
         self._last_time = 0
 
         self.score = 0
+        self._game_over = False
+        self._game_start = False
 
         self._background = Background()
 
-        self._snake = pygame.sprite.GroupSingle()
-        self._body = [pygame.sprite.GroupSingle()]
-        self._apple = pygame.sprite.GroupSingle()
+        self._snake = None
+        self._body = []
+        self._apple = None
+        self._last_apple_pos = (0, 0)
+        self._wall = []
 
     # noinspection PyTypeChecker
     def on_init(self):
@@ -118,9 +134,19 @@ class SnakeGame:
         self._display_surf = pygame.display.set_mode(self.size, pygame.HWSURFACE | pygame.DOUBLEBUF)
         self._background.load_img('assets/grass.png', self.size)
 
+        self._running = True
+
+    def start(self):
+        self._snake = pygame.sprite.GroupSingle()
+
+        self._body = [pygame.sprite.GroupSingle()
+                      ]
+        self._apple = pygame.sprite.GroupSingle()
+
+        self._wall = []
         y_pos = random.randint(100, self.width - self.cell_size)
         x_pos = random.randint(100, self.height - self.cell_size)
-        direction = random.choice(list(dir_table.values()))
+        direction = random.choice([dir_table['right'], dir_table['left']])
         print(direction)
 
         self._snake.add(SnakeHead(self.width, self.height, PNG_SIZE - 2))
@@ -128,46 +154,55 @@ class SnakeGame:
         self._snake.sprite.rect.center = (y_pos, x_pos)
 
         self.place_body(x_pos, y_pos, direction)
+        self.place_wall()
 
         self._move_timer = pygame.time.get_ticks()
-        self._running = True
 
     def on_event(self, event):
         if event.type == pygame.QUIT:
             self._running = False
         elif event.type == pygame.KEYDOWN:
-            if event.key == pygame.K_SPACE:
-                self._FPS = 10
-            elif event.key in list(dir_table.values()):
-                self._snake.update(0, event.key)
-
-    def move_snake(self):
-        tmp = self._snake.sprite.rect.center
-        for i in range(0, len(self._body)):
-            cur = self._body[i].sprite.rect.center
-            self._body[i].sprite.rect.center = tmp
-            tmp = cur
-        self._snake.update(self._dt)
+            if self._game_start:
+                if event.key in list(dir_table.values()):
+                    self._snake.update(0, event.key)
+            else:
+                if event.key == pygame.K_RETURN:
+                    self._game_start = True
+                    self._game_over = False
+                    self.score = 0
+                    self.start()
 
     def on_update(self):
         current_time = pygame.time.get_ticks()
-        if current_time - self._move_timer >= 500:
-            self._move_timer = current_time
-            self.move_snake()
 
-        self.main_logic()
+        if self._game_start:
+            if current_time - self._move_timer >= 300:
+                self._move_timer = current_time
+                self.move_snake()
 
-    def draw_snake(self):
-        self._snake.draw(self._display_surf)
-        self._body[len(self._body) - 1].sprite.image.set_alpha(128)
-        for body in self._body:
-            body.draw(self._display_surf)
+            self.main_logic()
 
     def on_render(self):
         self._display_surf.fill('black')
         self._background.blit(self._display_surf)
-        self.draw_snake()
-        self._apple.draw(self._display_surf)
+
+        if self._snake is not None:
+            self.draw_snake()
+            self._apple.draw(self._display_surf)
+            for wall in self._wall:
+                wall.draw(self._display_surf)
+
+        display_ingame_text(self._display_surf, self._font, f'Score: {self.score}', self.width / 2, 20, font_size=35)
+
+        if not self._game_start:
+            display_ingame_text(self._display_surf, self._font, 'Press enter to start',
+                                self.width / 2, self.height / 2 + 40,
+                                font_size=30)
+
+        if self._game_over:
+            self._game_start = False
+            display_ingame_text(self._display_surf, self._font, 'Game over', self.width / 2, self.height / 2 - 20,
+                                font_size=35)
 
         pygame.display.flip()
 
@@ -189,21 +224,124 @@ class SnakeGame:
             self._dt *= self._FPS
             self._dt += 1
             # print(self._dt)
-
-            self.on_update()
+            if self._game_start:
+                self.on_update()
             self.on_render()
 
         self.on_cleanup()
 
     def main_logic(self):
         if not self._apple.sprite:
-            self.place_apple()
+            self._last_apple_pos = self.place_apple()
 
         self.check_collision()
 
+    def move_snake(self):
+        tmp = self._snake.sprite.rect.center
+        for i in range(0, len(self._body)):
+            cur = self._body[i].sprite.rect.center
+            self._body[i].sprite.rect.center = tmp
+            tmp = cur
+        self._snake.update(self._dt)
+
+    def draw_snake(self):
+        self._snake.draw(self._display_surf)
+        self._body[len(self._body) - 1].sprite.image.set_alpha(128)
+        for body in self._body:
+            body.draw(self._display_surf)
+
     def place_apple(self):
-        apple = Apple((random.randint(20, self.width - 10), random.randint(20, self.height - 10)))
+        x_pos = random.randint(20, self.width - 10)
+        y_pos = random.randint(20, self.height - 10)
+        apple = Apple((x_pos, y_pos))
+        cl = False
+        while True:
+            for wall in self._wall:
+                if pygame.sprite.spritecollide(apple, wall, False):
+                    x_pos = random.randint(20, self.width - 10)
+                    y_pos = random.randint(20, self.height - 10)
+                    apple = Apple((x_pos, y_pos))
+                    cl = True
+                    break
+                else:
+                    cl = False
+
+            while abs(x_pos - self._last_apple_pos[0]) < 100 and abs(y_pos - self._last_apple_pos[1]) < 100:
+                x_pos = random.randint(20, self.width - 10)
+                y_pos = random.randint(20, self.height - 10)
+                apple = Apple((x_pos, y_pos))
+
+            if not cl:
+                break
+
         self._apple.add(apple)
+        return x_pos, y_pos
+
+    def place_wall(self):
+        min_space_between = 90
+        max_space_between = 135
+        num_of_wall = random.randint(3, 8)
+        # print(f'num of wall={num_of_wall}')
+        wall_list = [random.randint(10, 12) for _ in range(num_of_wall)]
+        w = Wall((0, 0))
+        wall_length = w.image.get_width()
+        wall_height = w.image.get_height()
+        # print(wall_list)
+        y_pos = random.randint(0, 70)
+
+        for wall in wall_list:
+            walls = pygame.sprite.Group()
+            direction = random.randint(1, 2)
+            # print(f'dir={direction}')
+
+            if direction == 1:  # left to right
+                x_pos = random.choice([random.randint(wall * wall_length + wall_length // 2, self.width),
+                                       self.width, self.width, self.width])
+                # x_pos = self.width
+                initial_center = x_pos - wall_length // 2
+                walls.add(Wall((initial_center, y_pos)))
+                for adj_wall in range(wall):
+                    if y_pos < self.height - wall_length // 2:
+                        if not self._snake.sprite.rect.top - wall_height // 2 <= y_pos \
+                               <= self._snake.sprite.rect.bottom + wall_height // 2:
+                            initial_center -= wall_length
+                            if initial_center >= wall_length // 2:
+                                # print(f'x={initial_center}, y={y_pos}')
+                                walls.add(Wall((initial_center, y_pos)))
+                            else:
+                                break
+                        else:
+                            walls = None
+                            break
+                    else:
+                        walls = None
+                        break
+
+            else:  # right to left
+                x_pos = random.choice([random.randint(0, self.width - wall * wall_length), 0, 0, 0])
+                # x_pos = 0
+                initial_center = x_pos + wall_length // 2
+                walls.add(Wall((initial_center, y_pos)))
+                for adj_wall in range(wall):
+                    if y_pos < self.height - wall_length // 2:
+                        if not self._snake.sprite.rect.top - wall_height // 2 <= y_pos \
+                               <= self._snake.sprite.rect.bottom + wall_height // 2:
+                            initial_center += wall_length
+                            if initial_center <= self.width - wall_length // 2:
+                                # print(f'x={initial_center}, y={y_pos}')
+                                walls.add(Wall((initial_center, y_pos)))
+                            else:
+                                break
+                        else:
+                            walls = None
+                            break
+                    else:
+                        walls = None
+                        break
+            y_pos += random.randint(min_space_between, max_space_between)
+            if walls:
+                # print(f'len={len(walls)}\n')
+                self._wall.append(walls)
 
     def place_body(self, x_pos, y_pos, direction):
         self._body[0].add(SnakeBody())
@@ -232,6 +370,10 @@ class SnakeGame:
             self._body.append(pygame.sprite.GroupSingle(new_block))
 
             self.score += 1
+
+        for wall in self._wall:
+            if pygame.sprite.groupcollide(self._snake, wall, True, False):
+                self._game_over = True
 
 
 def main():
